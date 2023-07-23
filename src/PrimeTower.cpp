@@ -16,7 +16,7 @@
 #include "Slice.h"
 #include "sliceDataStorage.h"
 
-#define CIRCLE_RESOLUTION 128 //The number of vertices in each circle.
+#define CIRCLE_RESOLUTION 256 //The number of vertices in each circle.
 
 
 namespace cura 
