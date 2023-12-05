@@ -4,6 +4,10 @@
 
 #include "plugins/converters.h"
 
+#include <range/v3/range/conversion.hpp>
+#include <range/v3/view/filter.hpp>
+#include <range/v3/view/transform.hpp>
+
 #include "GCodePathConfig.h"
 #include "WallToolPaths.h"
 #include "pathPlanning/GCodePath.h"
@@ -11,10 +15,6 @@
 #include "settings/Settings.h"
 #include "settings/types/LayerIndex.h"
 #include "utils/polygon.h"
-
-#include <range/v3/range/conversion.hpp>
-#include <range/v3/view/filter.hpp>
-#include <range/v3/view/transform.hpp>
 
 namespace cura::plugins
 {
@@ -70,7 +70,7 @@ handshake_request::value_type handshake_request::operator()(const std::string& n
 {
     value_type message{};
     message.set_slot_id(slot_info.slot_id);
-    message.set_version_range(slot_info.version_range.data());
+    message.set_version(slot_info.version.data());
     message.set_plugin_name(name);
     message.set_plugin_version(version);
     return message;
@@ -78,16 +78,18 @@ handshake_request::value_type handshake_request::operator()(const std::string& n
 
 handshake_response::native_value_type handshake_response::operator()(const handshake_response::value_type& message, std::string_view peer) const
 {
-    return { .slot_version = message.slot_version(),
+    return { .slot_version_range = message.slot_version_range(),
              .plugin_name = message.plugin_name(),
              .plugin_version = message.plugin_version(),
              .peer = std::string{ peer },
              .broadcast_subscriptions = std::set<int>(message.broadcast_subscriptions().begin(), message.broadcast_subscriptions().end()) };
 }
 
-simplify_request::value_type
-    simplify_request::operator()(const simplify_request::native_value_type& polygons, const coord_t max_resolution, const coord_t max_deviation, const coord_t max_area_deviation)
-        const
+simplify_request::value_type simplify_request::operator()(
+    const simplify_request::native_value_type& polygons,
+    const coord_t max_resolution,
+    [[maybe_unused]] const coord_t max_deviation,
+    [[maybe_unused]] const coord_t max_area_deviation) const
 {
     value_type message{};
     if (polygons.empty())
@@ -133,7 +135,7 @@ simplify_response::native_value_type
         Polygon o{};
         for (const auto& point : paths.outline().path())
         {
-            o.add(Point{ point.x(), point.y() });
+            o.add(Point2LL{ point.x(), point.y() });
         }
         poly.add(o);
 
@@ -142,7 +144,7 @@ simplify_response::native_value_type
             Polygon h{};
             for (const auto& point : hole.path())
             {
-                h.add(Point{ point.x(), point.y() });
+                h.add(Point2LL{ point.x(), point.y() });
             }
             poly.add(h);
         }
@@ -234,7 +236,7 @@ infill_generate_response::native_value_type infill_generate_response::operator()
         Polygon outline{};
         for (auto& path_msg : polygon_msg.outline().path())
         {
-            outline.add(Point{ path_msg.x(), path_msg.y() });
+            outline.add(Point2LL{ path_msg.x(), path_msg.y() });
         }
         polygon.add(outline);
 
@@ -244,7 +246,7 @@ infill_generate_response::native_value_type infill_generate_response::operator()
             Polygon hole{};
             for (auto& path_msg : hole_msg.path())
             {
-                hole.add(Point{ path_msg.x(), path_msg.y() });
+                hole.add(Point2LL{ path_msg.x(), path_msg.y() });
             }
             polygon.add(hole);
         }
@@ -257,7 +259,7 @@ infill_generate_response::native_value_type infill_generate_response::operator()
         Polygon poly_line;
         for (auto& p : polygon.path())
         {
-            poly_line.emplace_back(Point{ p.x(), p.y() });
+            poly_line.emplace_back(Point2LL{ p.x(), p.y() });
         }
         result_lines.emplace_back(poly_line);
     }
@@ -345,6 +347,7 @@ gcode_paths_modify_request::value_type
         gcode_path->set_retract(path.retract);
         gcode_path->set_unretract_before_last_travel_move(path.unretract_before_last_travel_move);
         gcode_path->set_perform_z_hop(path.perform_z_hop);
+        gcode_path->set_perform_prime(path.perform_prime);
         gcode_path->set_skip_agressive_merge_hint(path.skip_agressive_merge_hint);
         gcode_path->set_done(path.done);
         gcode_path->set_fan_speed(path.getFanSpeed());
@@ -430,7 +433,7 @@ gcode_paths_modify_response::native_value_type
     gcode_paths_modify_response::operator()(gcode_paths_modify_response::native_value_type& original_value, const gcode_paths_modify_response::value_type& message) const
 {
     std::vector<GCodePath> paths;
-    using map_t = std::unordered_map<std::string, std::shared_ptr<SliceMeshStorage>>;
+    using map_t = std::unordered_map<std::string, std::shared_ptr<const SliceMeshStorage>>;
     auto meshes = original_value
                 | ranges::views::filter(
                       [](const auto& path)
@@ -458,6 +461,7 @@ gcode_paths_modify_response::native_value_type
             .retract = gcode_path_msg.retract(),
             .unretract_before_last_travel_move = gcode_path_msg.unretract_before_last_travel_move(),
             .perform_z_hop = gcode_path_msg.perform_z_hop(),
+            .perform_prime = gcode_path_msg.perform_prime(),
             .skip_agressive_merge_hint = gcode_path_msg.skip_agressive_merge_hint(),
             .done = gcode_path_msg.done(),
             .fan_speed = gcode_path_msg.fan_speed(),
@@ -467,7 +471,7 @@ gcode_paths_modify_response::native_value_type
                     | ranges::views::transform(
                           [](const auto& point_msg)
                           {
-                              return Point{ point_msg.x(), point_msg.y() };
+                              return Point2LL{ point_msg.x(), point_msg.y() };
                           })
                     | ranges::to_vector;
 

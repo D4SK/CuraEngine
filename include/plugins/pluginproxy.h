@@ -4,18 +4,7 @@
 #ifndef PLUGINS_PLUGINPROXY_H
 #define PLUGINS_PLUGINPROXY_H
 
-#include "Application.h"
-#include "cura/plugins/slots/broadcast/v0/broadcast.grpc.pb.h"
-#include "cura/plugins/slots/broadcast/v0/broadcast.pb.h"
-#include "cura/plugins/slots/handshake/v0/handshake.grpc.pb.h"
-#include "cura/plugins/slots/handshake/v0/handshake.pb.h"
-#include "cura/plugins/v0/slot_id.pb.h"
-#include "plugins/broadcasts.h"
-#include "plugins/exception.h"
-#include "plugins/metadata.h"
-#include "utils/format/thread_id.h"
-#include "utils/types/char_range_literal.h"
-#include "utils/types/generic.h"
+#include <chrono>
 
 #include <agrpc/asio_grpc.hpp>
 #include <agrpc/client_rpc.hpp>
@@ -30,7 +19,18 @@
 #include <range/v3/utility/semiregular_box.hpp>
 #include <spdlog/spdlog.h>
 
-#include <chrono>
+#include "Application.h"
+#include "cura/plugins/slots/broadcast/v0/broadcast.grpc.pb.h"
+#include "cura/plugins/slots/broadcast/v0/broadcast.pb.h"
+#include "cura/plugins/slots/handshake/v0/handshake.grpc.pb.h"
+#include "cura/plugins/slots/handshake/v0/handshake.pb.h"
+#include "cura/plugins/v0/slot_id.pb.h"
+#include "plugins/broadcasts.h"
+#include "plugins/exception.h"
+#include "plugins/metadata.h"
+#include "utils/format/thread_id.h"
+#include "utils/types/char_range_literal.h"
+#include "utils/types/generic.h"
 #if __has_include(<coroutine>)
 #include <coroutine>
 #elif __has_include(<experimental/coroutine>)
@@ -50,7 +50,7 @@ namespace cura::plugins
  *
  * Template arguments are:
  * SlotID - plugin slot ID
- * SlotVersionRng - plugin version range
+ * SlotVersion - slot version used -- will be the only version available in the engine for that slot, since there is just the latest version of the slot a.t.m.
  * Stub - process stub type
  * ValidatorTp - validator type
  * RequestTp - gRPC convertible request type, or dummy -- if stub is a proper invoke-stub, this is enforced by the specialization of the invoke component
@@ -58,7 +58,7 @@ namespace cura::plugins
  *
  * Class provides methods for validating the plugin, making requests and processing responses.
  */
-template<plugins::v0::SlotID SlotID, utils::CharRangeLiteral SlotVersionRng, class Stub, class ValidatorTp, typename RequestTp, typename ResponseTp>
+template<plugins::v0::SlotID SlotID, utils::CharRangeLiteral SlotVersion, class Stub, class ValidatorTp, typename RequestTp, typename ResponseTp>
 class PluginProxy
 {
     // type aliases for easy use
@@ -131,7 +131,7 @@ public:
             spdlog::error(status.error_message());
             throw exceptions::RemoteException(slot_info_, status.error_message());
         }
-        if (! plugin_info.plugin_name.empty() && ! plugin_info.slot_version.empty())
+        if (! plugin_info.plugin_name.empty() && ! plugin_info.slot_version_range.empty())
         {
             plugin_info_.emplace(plugin_info);
         }
@@ -340,8 +340,8 @@ private:
     req_converter_type req_{}; ///< The Invoke request converter object.
     rsp_converter_type rsp_{}; ///< The Invoke response converter object.
     slot_metadata slot_info_{ .slot_id = SlotID,
-                              .version_range = SlotVersionRng.value,
-                              .engine_uuid = Application::getInstance().instance_uuid }; ///< Holds information about the plugin slot.
+                              .version = SlotVersion.value,
+                              .engine_uuid = Application::getInstance().instance_uuid_ }; ///< Holds information about the plugin slot.
     std::optional<plugin_metadata> plugin_info_{ std::optional<plugin_metadata>(std::nullopt) }; ///< Optional object that holds the plugin metadata, set after handshake
 };
 
