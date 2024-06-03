@@ -1,12 +1,12 @@
-// Copyright (c) 2023 UltiMaker
+// Copyright (c) 2024 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #include "gcodeExport.h"
 
-#include <assert.h>
+#include <cassert>
 #include <cmath>
 #include <iomanip>
-#include <stdarg.h>
+#include <numbers>
 
 #include <spdlog/spdlog.h>
 
@@ -18,6 +18,7 @@
 #include "WipeScriptConfig.h"
 #include "communication/Communication.h" //To send layer view data.
 #include "settings/types/LayerIndex.h"
+#include "sliceDataStorage.h"
 #include "utils/Date.h"
 #include "utils/string.h" // MMtoStream, PrecisionedDouble
 
@@ -61,6 +62,7 @@ GCodeExport::GCodeExport()
     bed_temperature_ = 0;
     build_volume_temperature_ = 0;
     machine_heated_build_volume_ = false;
+    ppr_enable_ = false;
 
     fan_number_ = 0;
     use_extruder_offset_to_offset_coords_ = false;
@@ -84,6 +86,7 @@ void GCodeExport::preSetup(const size_t start_extruder)
     setFlavor(mesh_group->settings.get<EGCodeFlavor>("machine_gcode_flavor"));
     use_extruder_offset_to_offset_coords_ = mesh_group->settings.get<bool>("machine_use_extruder_offset_to_offset_coords");
     const size_t extruder_count = Application::getInstance().current_slice_->scene.extruders.size();
+    ppr_enable_ = mesh_group->settings.get<bool>("ppr_enable");
 
     for (size_t extruder_nr = 0; extruder_nr < extruder_count; extruder_nr++)
     {
@@ -263,6 +266,28 @@ std::string GCodeExport::getFileHeader(
         prefix << ";PRINT.SIZE.MAX.Y:" << INT2MM(total_bounding_box_.max_.y_) << new_line_;
         prefix << ";PRINT.SIZE.MAX.Z:" << INT2MM(total_bounding_box_.max_.z_) << new_line_;
         prefix << ";SLICE_UUID:" << slice_uuid_ << new_line_;
+
+        if (ppr_enable_)
+        {
+            prefix << ";PPR_ENABLE:TRUE" << new_line_;
+
+            for (size_t extr_nr = 0; extr_nr < extruder_count; extr_nr++)
+            {
+                if (! extruder_is_used[extr_nr])
+                {
+                    continue;
+                }
+                const Settings& extruder_settings = Application::getInstance().current_slice_->scene.extruders[extr_nr].settings_;
+                prefix << ";EXTRUDER_TRAIN." << extr_nr << ".PPR_FLOW_WARNING:" << extruder_settings.get<double>("flow_warn_limit") << new_line_;
+                prefix << ";EXTRUDER_TRAIN." << extr_nr << ".PPR_FLOW_LIMIT:" << extruder_settings.get<double>("flow_anomaly_limit") << new_line_;
+                prefix << ";EXTRUDER_TRAIN." << extr_nr << ".PPR_PRINTING_TEMPERATURE_WARNING:" << extruder_settings.get<double>("print_temp_warn_limit") << new_line_;
+                prefix << ";EXTRUDER_TRAIN." << extr_nr << ".PPR_PRINTING_TEMPERATURE_LIMIT:" << extruder_settings.get<double>("print_temp_anomaly_limit") << new_line_;
+            }
+            prefix << ";PPR_BUILD_VOLUME_TEMPERATURE_WARNING:" << Application::getInstance().current_slice_->scene.extruders[0].settings_.get<double>("bv_temp_warn_limit")
+                   << new_line_;
+            prefix << ";PPR_BUILD_VOLUME_TEMPERATURE_LIMIT:" << Application::getInstance().current_slice_->scene.extruders[0].settings_.get<double>("bv_temp_anomaly_limit")
+                   << new_line_;
+        }
         prefix << ";END_OF_HEADER" << new_line_;
         break;
     default:
@@ -387,7 +412,7 @@ void GCodeExport::setFlowRateExtrusionSettings(double max_extrusion_offset, doub
     this->extrusion_offset_factor_ = extrusion_offset_factor;
 }
 
-Point3LL GCodeExport::getPosition() const
+const Point3LL& GCodeExport::getPosition() const
 {
     return current_position_;
 }
@@ -1429,7 +1454,9 @@ void GCodeExport::writeFanCommand(double speed)
     else if (speed > 0)
     {
         const bool should_scale_zero_to_one = Application::getInstance().current_slice_->scene.settings.get<bool>("machine_scale_fan_speed_zero_to_one");
-        *output_stream_ << "M106 S" << PrecisionedDouble{ (should_scale_zero_to_one ? 2u : 1u), (should_scale_zero_to_one ? speed : speed * 255) / 100 };
+        *output_stream_ << "M106 S"
+                        << PrecisionedDouble{ (should_scale_zero_to_one ? static_cast<uint8_t>(2) : static_cast<uint8_t>(1)),
+                                              (should_scale_zero_to_one ? speed : speed * 255) / 100 };
         if (fan_number_)
         {
             *output_stream_ << " P" << fan_number_;

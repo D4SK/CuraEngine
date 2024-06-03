@@ -3,7 +3,7 @@
 
 #include "SkeletalTrapezoidation.h"
 
-#include <functional>
+#include <numbers>
 #include <queue>
 #include <sstream>
 #include <stack>
@@ -370,7 +370,7 @@ void SkeletalTrapezoidation::computeSegmentCellRange(
 }
 
 SkeletalTrapezoidation::SkeletalTrapezoidation(
-    const Polygons& polys,
+    const Shape& polys,
     const BeadingStrategy& beading_strategy,
     AngleRadians transitioning_angle,
     coord_t discretization_step_size,
@@ -392,7 +392,7 @@ SkeletalTrapezoidation::SkeletalTrapezoidation(
     constructFromPolygons(polys);
 }
 
-void SkeletalTrapezoidation::constructFromPolygons(const Polygons& polys)
+void SkeletalTrapezoidation::constructFromPolygons(const Shape& polys)
 {
     vd_edge_to_he_edge_.clear();
     vd_node_to_he_node_.clear();
@@ -402,7 +402,7 @@ void SkeletalTrapezoidation::constructFromPolygons(const Polygons& polys)
     std::vector<Segment> segments;
     for (size_t poly_idx = 0; poly_idx < polys.size(); poly_idx++)
     {
-        ConstPolygonRef poly = polys[poly_idx];
+        const Polygon& poly = polys[poly_idx];
         for (size_t point_idx = 0; point_idx < poly.size(); point_idx++)
         {
             segments.emplace_back(&polys, poly_idx, point_idx);
@@ -544,27 +544,27 @@ void SkeletalTrapezoidation::generateToolpaths(std::vector<VariableWidthLines>& 
         scripta::CellVDI{ "is_central",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.is_central);
+                              return static_cast<int>(edge.data_.is_central);
                           } },
         scripta::CellVDI{ "type",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.type);
+                              return static_cast<int>(edge.data_.type_);
                           } },
         scripta::PointVDI{ "distance_to_boundary",
                            [](const auto& node)
                            {
-                               return node->data.distance_to_boundary;
+                               return node->data_.distance_to_boundary_;
                            } },
         scripta::PointVDI{ "bead_count",
                            [](const auto& node)
                            {
-                               return node->data.bead_count;
+                               return node->data_.bead_count_;
                            } },
         scripta::PointVDI{ "transition_ratio",
                            [](const auto& node)
                            {
-                               return node->data.transition_ratio;
+                               return node->data_.transition_ratio_;
                            } });
 
     filterNoncentralRegions();
@@ -576,27 +576,27 @@ void SkeletalTrapezoidation::generateToolpaths(std::vector<VariableWidthLines>& 
         scripta::CellVDI{ "is_central",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.is_central);
+                              return static_cast<int>(edge.data_.is_central);
                           } },
         scripta::CellVDI{ "type",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.type);
+                              return static_cast<int>(edge.data_.type_);
                           } },
         scripta::PointVDI{ "distance_to_boundary",
                            [](const auto& node)
                            {
-                               return node->data.distance_to_boundary;
+                               return node->data_.distance_to_boundary_;
                            } },
         scripta::PointVDI{ "bead_count",
                            [](const auto& node)
                            {
-                               return node->data.bead_count;
+                               return node->data_.bead_count_;
                            } },
         scripta::PointVDI{ "transition_ratio",
                            [](const auto& node)
                            {
-                               return node->data.transition_ratio;
+                               return node->data_.transition_ratio_;
                            } });
 
     generateTransitioningRibs();
@@ -608,27 +608,27 @@ void SkeletalTrapezoidation::generateToolpaths(std::vector<VariableWidthLines>& 
         scripta::CellVDI{ "is_central",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.is_central);
+                              return static_cast<int>(edge.data_.is_central);
                           } },
         scripta::CellVDI{ "type",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.type);
+                              return static_cast<int>(edge.data_.type_);
                           } },
         scripta::PointVDI{ "distance_to_boundary",
                            [](const auto& node)
                            {
-                               return node->data.distance_to_boundary;
+                               return node->data_.distance_to_boundary_;
                            } },
         scripta::PointVDI{ "bead_count",
                            [](const auto& node)
                            {
-                               return node->data.bead_count;
+                               return node->data_.bead_count_;
                            } },
         scripta::PointVDI{ "transition_ratio",
                            [](const auto& node)
                            {
-                               return node->data.transition_ratio;
+                               return node->data_.transition_ratio_;
                            } });
 
     generateExtraRibs();
@@ -640,27 +640,27 @@ void SkeletalTrapezoidation::generateToolpaths(std::vector<VariableWidthLines>& 
         scripta::CellVDI{ "is_central",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.is_central);
+                              return static_cast<int>(edge.data_.is_central);
                           } },
         scripta::CellVDI{ "type",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.type);
+                              return static_cast<int>(edge.data_.type_);
                           } },
         scripta::PointVDI{ "distance_to_boundary",
                            [](const auto& node)
                            {
-                               return node->data.distance_to_boundary;
+                               return node->data_.distance_to_boundary_;
                            } },
         scripta::PointVDI{ "bead_count",
                            [](const auto& node)
                            {
-                               return node->data.bead_count;
+                               return node->data_.bead_count_;
                            } },
         scripta::PointVDI{ "transition_ratio",
                            [](const auto& node)
                            {
-                               return node->data.transition_ratio;
+                               return node->data_.transition_ratio_;
                            } });
 
     generateSegments();
@@ -672,27 +672,27 @@ void SkeletalTrapezoidation::generateToolpaths(std::vector<VariableWidthLines>& 
         scripta::CellVDI{ "is_central",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.is_central);
+                              return static_cast<int>(edge.data_.is_central);
                           } },
         scripta::CellVDI{ "type",
                           [](const auto& edge)
                           {
-                              return static_cast<int>(edge.data.type);
+                              return static_cast<int>(edge.data_.type_);
                           } },
         scripta::PointVDI{ "distance_to_boundary",
                            [](const auto& node)
                            {
-                               return node->data.distance_to_boundary;
+                               return node->data_.distance_to_boundary_;
                            } },
         scripta::PointVDI{ "bead_count",
                            [](const auto& node)
                            {
-                               return node->data.bead_count;
+                               return node->data_.bead_count_;
                            } },
         scripta::PointVDI{ "transition_ratio",
                            [](const auto& node)
                            {
-                               return node->data.transition_ratio;
+                               return node->data_.transition_ratio_;
                            } });
 }
 

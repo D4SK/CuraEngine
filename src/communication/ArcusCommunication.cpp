@@ -1,15 +1,28 @@
-// Copyright (c) 2023 UltiMaker
+// Copyright (c) 2024 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #ifdef ARCUS
 
 #include "communication/ArcusCommunication.h"
 
+#ifdef SENTRY_URL
+#ifdef _WIN32
+#if ! defined(NOMINMAX)
+#define NOMINMAX
+#endif
+#if ! defined(WIN32_LEAN_AND_MEAN)
+#define WIN32_LEAN_AND_MEAN
+#endif
+#endif
+#include <sentry.h>
+#endif
+
 #include <thread> //To sleep while waiting for the connection.
 #include <unordered_map> //To map settings to their extruder numbers for limit_to_extruder.
 
 #include <Arcus/Socket.h> //The socket to communicate to.
 #include <fmt/format.h>
+#include <spdlog/details/os.h>
 #include <spdlog/spdlog.h>
 
 #include "Application.h" //To get and set the current slice command.
@@ -20,11 +33,11 @@
 #include "communication/ArcusCommunicationPrivate.h" //Our PIMPL.
 #include "communication/Listener.h" //To listen to the Arcus socket.
 #include "communication/SliceDataStruct.h" //To store sliced layer data.
+#include "geometry/Polygon.h"
 #include "plugins/slots.h"
 #include "settings/types/LayerIndex.h" //To point to layers.
 #include "settings/types/Velocity.h" //To send to layer view how fast stuff is printing.
 #include "utils/channel.h"
-#include "utils/polygon.h"
 
 namespace cura
 {
@@ -223,7 +236,7 @@ public:
      * \param thickness The layer thickness of the polygon.
      * \param velocity How fast the polygon is printed.
      */
-    void sendPolygon(const PrintFeatureType& print_feature_type, const ConstPolygonRef& polygon, const coord_t& width, const coord_t& thickness, const Velocity& velocity)
+    void sendPolygon(const PrintFeatureType& print_feature_type, const Polygon& polygon, const coord_t& width, const coord_t& thickness, const Velocity& velocity)
     {
         if (polygon.size() < 2) // Don't send single points or empty polygons.
         {
@@ -431,19 +444,14 @@ void ArcusCommunication::sendOptimizedLayerData()
     data.slice_data.clear();
 }
 
-void ArcusCommunication::sendPolygon(
-    const PrintFeatureType& type,
-    const ConstPolygonRef& polygon,
-    const coord_t& line_width,
-    const coord_t& line_thickness,
-    const Velocity& velocity)
+void ArcusCommunication::sendPolygon(const PrintFeatureType& type, const Polygon& polygon, const coord_t& line_width, const coord_t& line_thickness, const Velocity& velocity)
 {
     path_compiler->sendPolygon(type, polygon, line_width, line_thickness, velocity);
 }
 
-void ArcusCommunication::sendPolygons(const PrintFeatureType& type, const Polygons& polygons, const coord_t& line_width, const coord_t& line_thickness, const Velocity& velocity)
+void ArcusCommunication::sendPolygons(const PrintFeatureType& type, const Shape& polygons, const coord_t& line_width, const coord_t& line_thickness, const Velocity& velocity)
 {
-    for (const std::vector<Point2LL>& polygon : polygons)
+    for (const Polygon& polygon : polygons)
     {
         path_compiler->sendPolygon(type, polygon, line_width, line_thickness, velocity);
     }
@@ -518,11 +526,30 @@ void ArcusCommunication::sliceNext()
     }
     spdlog::debug("Received a Slice message.");
 
+#ifdef SENTRY_URL
+    sentry_value_t user = sentry_value_new_object();
+    sentry_value_set_by_key(user, "id", sentry_value_new_string(slice_message->sentry_id().c_str()));
+    if (slice_message->has_user_name())
+    {
+        spdlog::debug("Setting Sentry user to {}", slice_message->user_name());
+        sentry_value_set_by_key(user, "username", sentry_value_new_string(slice_message->user_name().c_str()));
+    }
+    sentry_set_user(user);
+    sentry_set_tag("cura.version", slice_message->cura_version().c_str());
+    if (slice_message->has_project_name())
+    {
+        sentry_set_tag("cura.project_name", slice_message->project_name().c_str());
+    }
+#endif
+
 #ifdef ENABLE_PLUGINS
     for (const auto& plugin : slice_message->engine_plugins())
     {
         const auto slot_id = static_cast<plugins::v0::SlotID>(plugin.id());
         slots::instance().connect(slot_id, plugin.plugin_name(), plugin.plugin_version(), utils::createChannel({ plugin.address(), plugin.port() }));
+#ifdef SENTRY_URL
+        sentry_set_tag(fmt::format("plugin_{}.version", plugin.plugin_name()).c_str(), plugin.plugin_version().c_str());
+#endif
     }
 #endif // ENABLE_PLUGINS
 

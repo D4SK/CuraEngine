@@ -1,4 +1,4 @@
-// Copyright (c) 2023 UltiMaker
+// Copyright (c) 2024 UltiMaker
 // CuraEngine is released under the terms of the AGPLv3 or higher
 
 #ifndef LAYER_PLAN_H
@@ -10,13 +10,16 @@
 #include "PathOrderOptimizer.h"
 #include "SpaceFillType.h"
 #include "gcodeExport.h"
+#include "geometry/LinesSet.h"
+#include "geometry/OpenLinesSet.h"
+#include "geometry/Polygon.h"
 #include "pathPlanning/GCodePath.h"
 #include "pathPlanning/NozzleTempInsert.h"
 #include "pathPlanning/TimeMaterialEstimates.h"
+#include "raft.h"
 #include "settings/PathConfigStorage.h"
 #include "settings/types/LayerIndex.h"
 #include "utils/ExtrusionJunction.h"
-#include "utils/polygon.h"
 
 #ifdef BUILD_TESTS
 #include <gtest/gtest_prod.h> //Friend tests, so that they can inspect the privates.
@@ -55,7 +58,7 @@ class LayerPlan : public NoCopy
 
 public:
     const PathConfigStorage configs_storage_; //!< The line configs for this layer for each feature type
-    coord_t z_;
+    const coord_t z_;
     coord_t final_travel_z_;
     bool mode_skip_agressive_merge_; //!< Whether to give every new path the 'skip_agressive_merge_hint' property (see GCodePath); default is false.
 
@@ -63,11 +66,13 @@ private:
     const SliceDataStorage& storage_; //!< The polygon data obtained from FffPolygonProcessor
     const LayerIndex layer_nr_; //!< The layer number of this layer plan
     const bool is_initial_layer_; //!< Whether this is the first layer (which might be raft)
-    const bool is_raft_layer_; //!< Whether this is a layer which is part of the raft
+    const Raft::LayerType layer_type_; //!< Which part of the raft, airgap or model this layer is.
     coord_t layer_thickness_;
 
     std::vector<Point2LL> layer_start_pos_per_extruder_; //!< The starting position of a layer for each extruder
     std::vector<bool> has_prime_tower_planned_per_extruder_; //!< For each extruder, whether the prime tower is planned yet or not.
+    bool has_prime_tower_base_planned_; //!< Whether the prime tower base is planned yet or not.
+    bool has_prime_tower_inset_planned_; //!< Whether the prime tower inset is planned yet or not.
     std::optional<Point2LL> last_planned_position_; //!< The last planned XY position of the print head (if known)
 
     std::shared_ptr<const SliceMeshStorage> current_mesh_; //!< The mesh of the last planned move.
@@ -89,12 +94,13 @@ private:
     std::optional<std::pair<Acceleration, Velocity>> next_layer_acc_jerk_; //!< If there is a next layer, the first acceleration and jerk it starts with.
     bool was_inside_; //!< Whether the last planned (extrusion) move was inside a layer part
     bool is_inside_; //!< Whether the destination of the next planned travel move is inside a layer part
-    Polygons comb_boundary_minimum_; //!< The minimum boundary within which to comb, or to move into when performing a retraction.
-    Polygons comb_boundary_preferred_; //!< The boundary preferably within which to comb, or to move into when performing a retraction.
+    Shape comb_boundary_minimum_; //!< The minimum boundary within which to comb, or to move into when performing a retraction.
+    Shape comb_boundary_preferred_; //!< The boundary preferably within which to comb, or to move into when performing a retraction.
     Comb* comb_;
     coord_t comb_move_inside_distance_; //!< Whenever using the minimum boundary for combing it tries to move the coordinates inside by this distance after calculating the combing.
-    Polygons bridge_wall_mask_; //!< The regions of a layer part that are not supported, used for bridging
-    Polygons overhang_mask_; //!< The regions of a layer part where the walls overhang
+    Shape bridge_wall_mask_; //!< The regions of a layer part that are not supported, used for bridging
+    Shape overhang_mask_; //!< The regions of a layer part where the walls overhang
+    Shape roofing_mask_; //!< The regions of a layer part where the walls are exposed to the air
 
     const std::vector<FanSpeedLayerTimeSettings> fan_speed_layer_time_settings_per_extruder_;
 
@@ -174,7 +180,7 @@ public:
      */
     ExtruderTrain* getLastPlannedExtruderTrain();
 
-    const Polygons* getCombBoundaryInside() const;
+    const Shape* getCombBoundaryInside() const;
 
     LayerIndex getLayerNr() const;
 
@@ -202,6 +208,26 @@ public:
      * planned.
      */
     void setPrimeTowerIsPlanned(unsigned int extruder_nr);
+
+    /*!
+     * Whether the prime tower extra base is already planned.
+     */
+    bool getPrimeTowerBaseIsPlanned() const;
+
+    /*!
+     * Mark the prime tower extra base as planned.
+     */
+    void setPrimeTowerBaseIsPlanned();
+
+    /*!
+     * Whether the prime tower extra inset is already planned.
+     */
+    bool getPrimeTowerInsetIsPlanned() const;
+
+    /*!
+     * Mark the prime tower extra inset as planned.
+     */
+    void setPrimeTowerInsetIsPlanned();
 
     bool getSkirtBrimIsPlanned(unsigned int extruder_nr) const;
 
@@ -247,14 +273,21 @@ public:
      *
      * \param polys The unsupported areas of the part currently being processed that will require bridges.
      */
-    void setBridgeWallMask(const Polygons& polys);
+    void setBridgeWallMask(const Shape& polys);
 
     /*!
      * Set overhang_mask.
      *
      * \param polys The overhung areas of the part currently being processed that will require modified print settings
      */
-    void setOverhangMask(const Polygons& polys);
+    void setOverhangMask(const Shape& polys);
+
+    /*!
+     * Set roofing_mask.
+     *
+     * \param polys The areas of the part currently being processed that will require roofing.
+     */
+    void setRoofingMask(const Shape& polys);
 
     /*!
      * Travel to a certain point, with all of the procedures necessary to do so.
@@ -340,7 +373,7 @@ public:
      * \param always_retract Whether to force a retraction when moving to the start of the polygon (used for outer walls)
      */
     void addPolygon(
-        ConstPolygonRef polygon,
+        const Polygon& polygon,
         int startIdx,
         const bool reverse,
         const GCodePathConfig& config,
@@ -378,7 +411,7 @@ public:
      * If unset, this causes it to start near the last planned location.
      */
     void addPolygonsByOptimizer(
-        const Polygons& polygons,
+        const Shape& polygons,
         const GCodePathConfig& config,
         const ZSeamConfig& z_seam_config = ZSeamConfig(),
         coord_t wall_0_wipe_dist = 0,
@@ -394,8 +427,10 @@ public:
      * \param p1 The end vertex of the line.
      * \param settings The settings which should apply to this line added to the
      * layer plan.
-     * \param non_bridge_config The config with which to print the wall lines
-     * that are not spanning a bridge.
+     * \param default_config The config with which to print the wall lines
+     * that are not spanning a bridge or are exposed to air.
+     * \param roofing_config The config with which to print the wall lines
+     * that are exposed to air.
      * \param bridge_config The config with which to print the wall lines that
      * are spanning a bridge.
      * \param flow The ratio with which to multiply the extrusion amount.
@@ -412,7 +447,8 @@ public:
         const Point2LL& p0,
         const Point2LL& p1,
         const Settings& settings,
-        const GCodePathConfig& non_bridge_config,
+        const GCodePathConfig& default_config,
+        const GCodePathConfig& roofing_config,
         const GCodePathConfig& bridge_config,
         double flow,
         const Ratio width_factor,
@@ -425,10 +461,10 @@ public:
      * \param wall The vertices of the wall to add.
      * \param start_idx The index of the starting vertex to start at.
      * \param settings The settings which should apply to this wall added to the layer plan.
-     * \param non_bridge_config The config with which to print the wall lines
-     * that are not spanning a bridge.
-     * \param bridge_config The config with which to print the wall lines that
-     * are spanning a bridge.
+     * \param default_config The config with which to print the wall lines
+     * that are not spanning a bridge or are exposed to air.
+     * \param roofing_config The config with which to print the wall lines
+     * that are exposed to air.
      * \param wall_0_wipe_dist The distance to travel along the wall after it
      * has been laid down, in order to wipe the start and end of the wall
      * \param flow_ratio The ratio with which to multiply the extrusion amount.
@@ -436,10 +472,11 @@ public:
      * start of the wall (used for outer walls).
      */
     void addWall(
-        ConstPolygonRef wall,
+        const Polygon& wall,
         int start_idx,
         const Settings& settings,
-        const GCodePathConfig& non_bridge_config,
+        const GCodePathConfig& default_config,
+        const GCodePathConfig& roofing_config,
         const GCodePathConfig& bridge_config,
         coord_t wall_0_wipe_dist,
         double flow_ratio,
@@ -450,8 +487,10 @@ public:
      * \param wall The wall of type ExtrusionJunctions
      * \param start_idx The index of the starting vertex to start at.
      * \param mesh The current mesh being added to the layer plan.
-     * \param non_bridge_config The config with which to print the wall lines
-     * that are not spanning a bridge.
+     * \param default_config The config with which to print the wall lines
+     * that are not spanning a bridge or are exposed to air.
+     * \param roofing_config The config with which to print the wall lines
+     * that are exposed to air.
      * \param bridge_config The config with which to print the wall lines that
      * are spanning a bridge
      * \param wall_0_wipe_dist The distance to travel along the wall after it
@@ -468,7 +507,8 @@ public:
         const ExtrusionLine& wall,
         int start_idx,
         const Settings& settings,
-        const GCodePathConfig& non_bridge_config,
+        const GCodePathConfig& default_config,
+        const GCodePathConfig& roofing_config,
         const GCodePathConfig& bridge_config,
         coord_t wall_0_wipe_dist,
         double flow_ratio,
@@ -489,7 +529,10 @@ public:
      * Add walls (polygons) to the gcode with optimized order.
      * \param walls The walls
      * \param settings The settings which should apply to these walls added to the layer plan.
-     * \param non_bridge_config The config with which to print the wall lines that are not spanning a bridge
+     * \param default_config The config with which to print the wall lines
+     * that are not spanning a bridge or are exposed to air.
+     * \param roofing_config The config with which to print the wall lines
+     * that are exposed to air.
      * \param bridge_config The config with which to print the wall lines that are spanning a bridge
      * \param z_seam_config Optional configuration for z-seam
      * \param wall_0_wipe_dist The distance to travel along each wall after it has been laid down, in order to wipe the start and end of the wall together
@@ -498,9 +541,10 @@ public:
      * \param alternate_inset_direction_modifier Whether to alternate the direction of the walls for each inset.
      */
     void addWalls(
-        const Polygons& walls,
+        const Shape& walls,
         const Settings& settings,
-        const GCodePathConfig& non_bridge_config,
+        const GCodePathConfig& default_config,
+        const GCodePathConfig& roofing_config,
         const GCodePathConfig& bridge_config,
         const ZSeamConfig& z_seam_config = ZSeamConfig(),
         coord_t wall_0_wipe_dist = 0,
@@ -509,7 +553,7 @@ public:
 
     /*!
      * Add lines to the gcode with optimized order.
-     * \param polygons The lines
+     * \param lines The lines
      * \param config The config of the lines
      * \param space_fill_type The type of space filling used to generate the line segments (should be either Lines or PolyLines!)
      * \param enable_travel_optimization Whether to enable some potentially time consuming optimization of order the lines are printed to reduce the travel time required.
@@ -518,10 +562,11 @@ public:
      * \param near_start_location Optional: Location near where to add the first line. If not provided the last position is used.
      * \param fan_speed optional fan speed override for this path
      * \param reverse_print_direction Whether to reverse the optimized order and their printing direction.
-     * \param order_requirements Pairs where first needs to be printed before second. Pointers are pointing to elements of \p polygons
+     * \param order_requirements Pairs where first needs to be printed before second. Pointers are pointing to elements of \p lines
      */
+    template<class LineType>
     void addLinesByOptimizer(
-        const Polygons& polygons,
+        const LinesSet<LineType>& lines,
         const GCodePathConfig& config,
         const SpaceFillType space_fill_type,
         const bool enable_travel_optimization = false,
@@ -530,11 +575,36 @@ public:
         const std::optional<Point2LL> near_start_location = std::optional<Point2LL>(),
         const double fan_speed = GCodePathConfig::FAN_SPEED_DEFAULT,
         const bool reverse_print_direction = false,
-        const std::unordered_multimap<ConstPolygonPointer, ConstPolygonPointer>& order_requirements = PathOrderOptimizer<ConstPolygonPointer>::no_order_requirements_);
+        const std::unordered_multimap<const Polyline*, const Polyline*>& order_requirements = PathOrderOptimizer<const Polyline*>::no_order_requirements_);
 
     /*!
-     * Add polygons to the g-code with monotonic order.
-     * \param polygons The lines to add.
+     * Add lines to the gcode with optimized order.
+     * \param lines The lines
+     * \param config The config of the lines
+     * \param space_fill_type The type of space filling used to generate the line segments (should be either Lines or PolyLines!)
+     * \param enable_travel_optimization Whether to enable some potentially time consuming optimization of order the lines are printed to reduce the travel time required.
+     * \param wipe_dist (optional) the distance wiped without extruding after laying down a line.
+     * \param flow_ratio The ratio with which to multiply the extrusion amount
+     * \param near_start_location Optional: Location near where to add the first line. If not provided the last position is used.
+     * \param fan_speed optional fan speed override for this path
+     * \param reverse_print_direction Whether to reverse the optimized order and their printing direction.
+     * \param order_requirements Pairs where first needs to be printed before second. Pointers are pointing to elements of \p lines
+     */
+    void addLinesByOptimizer(
+        const MixedLinesSet& lines,
+        const GCodePathConfig& config,
+        const SpaceFillType space_fill_type,
+        const bool enable_travel_optimization = false,
+        const coord_t wipe_dist = 0,
+        const Ratio flow_ratio = 1.0,
+        const std::optional<Point2LL> near_start_location = std::optional<Point2LL>(),
+        const double fan_speed = GCodePathConfig::FAN_SPEED_DEFAULT,
+        const bool reverse_print_direction = false,
+        const std::unordered_multimap<const Polyline*, const Polyline*>& order_requirements = PathOrderOptimizer<const Polyline*>::no_order_requirements_);
+
+    /*!
+     * Add lines to the g-code with monotonic order.
+     * \param lines The lines to add.
      * \param config The settings to print those lines with.
      * \param space_fill_type The type of space filling used to generate the
      * line segments (should be either Lines or PolyLines!)
@@ -554,8 +624,8 @@ public:
      * \param fan_speed Fan speed override for this path.
      */
     void addLinesMonotonic(
-        const Polygons& area,
-        const Polygons& polygons,
+        const Shape& area,
+        const OpenLinesSet& lines,
         const GCodePathConfig& config,
         const SpaceFillType space_fill_type,
         const AngleRadians monotonic_direction,
@@ -565,25 +635,6 @@ public:
         const Ratio flow_ratio = 1.0_r,
         const double fan_speed = GCodePathConfig::FAN_SPEED_DEFAULT);
 
-protected:
-    /*!
-     * Add order optimized lines to the gcode.
-     * \param paths The paths in order
-     * \param config The config of the lines
-     * \param space_fill_type The type of space filling used to generate the line segments (should be either Lines or PolyLines!)
-     * \param wipe_dist (optional) the distance wiped without extruding after laying down a line.
-     * \param flow_ratio The ratio with which to multiply the extrusion amount
-     * \param fan_speed optional fan speed override for this path
-     */
-    void addLinesInGivenOrder(
-        const std::vector<PathOrdering<ConstPolygonPointer>>& paths,
-        const GCodePathConfig& config,
-        const SpaceFillType space_fill_type,
-        const coord_t wipe_dist,
-        const Ratio flow_ratio,
-        const double fan_speed);
-
-public:
     /*!
      * Add a spiralized slice of wall that is interpolated in X/Y between \p last_wall and \p wall.
      *
@@ -599,8 +650,8 @@ public:
      */
     void spiralizeWallSlice(
         const GCodePathConfig& config,
-        ConstPolygonRef wall,
-        ConstPolygonRef last_wall,
+        const Polygon& wall,
+        const Polygon& last_wall,
         int seam_vertex_idx,
         int last_seam_vertex_idx,
         const bool is_top_layer,
@@ -624,7 +675,7 @@ public:
             return start_idx;
         }
 
-        Polygons air_below(bridge_wall_mask_.unionPolygons(overhang_mask_));
+        const auto air_below = bridge_wall_mask_.unionPolygons(overhang_mask_);
 
         unsigned curr_idx = start_idx;
 
@@ -704,7 +755,7 @@ public:
      * it.
      * \param part If given, stay within the boundary of this part.
      */
-    void moveInsideCombBoundary(const coord_t distance, const std::optional<SliceLayerPart>& part = std::nullopt);
+    void moveInsideCombBoundary(const coord_t distance, const std::optional<SliceLayerPart>& part = std::nullopt, GCodePath* path = nullptr);
 
     /*!
      * If enabled, apply the modify plugin to the layer-plan.
@@ -735,9 +786,26 @@ private:
      *  - If CombingMode::INFILL: Add the infill (infill only).
      *
      * \param boundary_type The boundary type to compute.
-     * \return the combing boundary or an empty Polygons if no combing is required
+     * \return the combing boundary or an empty Shape if no combing is required
      */
-    Polygons computeCombBoundary(const CombBoundary boundary_type);
+    Shape computeCombBoundary(const CombBoundary boundary_type);
+
+    /*!
+     * Add order optimized lines to the gcode.
+     * \param lines The lines in order
+     * \param config The config of the lines
+     * \param space_fill_type The type of space filling used to generate the line segments (should be either Lines or PolyLines!)
+     * \param wipe_dist (optional) the distance wiped without extruding after laying down a line.
+     * \param flow_ratio The ratio with which to multiply the extrusion amount
+     * \param fan_speed optional fan speed override for this path
+     */
+    void addLinesInGivenOrder(
+        const std::vector<PathOrdering<const Polyline*>>& lines,
+        const GCodePathConfig& config,
+        const SpaceFillType space_fill_type,
+        const coord_t wipe_dist,
+        const Ratio flow_ratio,
+        const double fan_speed);
 };
 
 } // namespace cura

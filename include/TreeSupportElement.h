@@ -10,9 +10,9 @@
 #include "TreeModelVolumes.h"
 #include "TreeSupportBaseCircle.h"
 #include "TreeSupportEnums.h"
+#include "geometry/Shape.h"
 #include "settings/types/LayerIndex.h"
 #include "utils/Coord_t.h"
-#include "utils/polygon.h"
 
 namespace cura
 {
@@ -95,7 +95,7 @@ struct TreeSupportElement
         RecreateInfluenceLimitArea();
     }
 
-    TreeSupportElement(const TreeSupportElement& elem, Polygons* newArea = nullptr)
+    TreeSupportElement(const TreeSupportElement& elem, Shape* newArea = nullptr)
         : // copy constructor with possibility to set a new area
         target_height_(elem.target_height_)
         , target_position_(elem.target_position_)
@@ -277,7 +277,7 @@ struct TreeSupportElement
      * \brief The resulting influence area.
      * Will only be set in the results of createLayerPathing, and will be nullptr inside!
      */
-    Polygons* area_;
+    Shape* area_;
 
     /*!
      * \brief The resulting center point around which a circle will be drawn later.
@@ -351,7 +351,7 @@ struct TreeSupportElement
     /*!
      * \brief Area that influence area has to be inside to conform to influence_area_limit_range.
      */
-    Polygons influence_area_limit_area_;
+    Shape influence_area_limit_area_;
 
     /*!
      * \brief Additional locations that the tip should reach
@@ -402,7 +402,7 @@ struct TreeSupportElement
                 Polygon circle;
                 for (Point2LL corner : TreeSupportBaseCircle::getBaseCircle())
                 {
-                    circle.add(p + corner * influence_area_limit_range_ / double(TreeSupportBaseCircle::base_radius));
+                    circle.push_back(p + corner * influence_area_limit_range_ / double(TreeSupportBaseCircle::base_radius));
                 }
                 if (influence_area_limit_area_.empty())
                 {
@@ -415,9 +415,11 @@ struct TreeSupportElement
             }
         }
     }
+
     void setToBuildplateForAllParents(bool new_value)
     {
         to_buildplate_ = new_value;
+        to_model_gracious_ |= new_value;
         std::vector<TreeSupportElement*> grandparents{ parents_ };
         while (! grandparents.empty())
         {
@@ -426,6 +428,7 @@ struct TreeSupportElement
             {
                 next_parents.insert(next_parents.end(), grandparent->parents_.begin(), grandparent->parents_.end());
                 grandparent->to_buildplate_ = new_value;
+                grandparent->to_model_gracious_ |= new_value; // If we set to_buildplate to true, update to_model_gracious
             }
             grandparents = next_parents;
         }

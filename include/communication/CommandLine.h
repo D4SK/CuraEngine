@@ -1,12 +1,14 @@
-//  Copyright (c) 2018-2022 Ultimaker B.V.
-//  CuraEngine is released under the terms of the AGPLv3 or higher.
+// Copyright (c) 2024 UltiMaker
+// CuraEngine is released under the terms of the AGPLv3 or higher
 
 #ifndef COMMANDLINE_H
 #define COMMANDLINE_H
 
+#include <filesystem>
+#include <optional>
 #include <rapidjson/document.h> //Loading JSON documents to get settings from them.
 #include <string> //To store the command line arguments.
-#include <unordered_set>
+#include <unordered_map>
 #include <vector> //To store the command line arguments.
 
 #include "Communication.h" //The class we're implementing.
@@ -14,6 +16,9 @@
 namespace cura
 {
 class Settings;
+
+using setting_map = std::unordered_map<std::string, std::string>;
+using container_setting_map = std::unordered_map<std::string, setting_map>;
 
 /*
  * \brief When slicing via the command line, interprets the command line
@@ -107,14 +112,14 @@ public:
      *
      * The command line doesn't show any layer view so this is ignored.
      */
-    void sendPolygon(const PrintFeatureType&, const ConstPolygonRef&, const coord_t&, const coord_t&, const Velocity&) override;
+    void sendPolygon(const PrintFeatureType&, const Polygon&, const coord_t&, const coord_t&, const Velocity&) override;
 
     /*
      * \brief Send a polygon to show it in layer view.
      *
      * The command line doesn't show any layer view so this is ignored.
      */
-    void sendPolygons(const PrintFeatureType&, const Polygons&, const coord_t&, const coord_t&, const Velocity&) override;
+    void sendPolygons(const PrintFeatureType&, const Shape&, const coord_t&, const coord_t&, const Velocity&) override;
 
     /*
      * \brief Show an estimate of how long the print would take and how much
@@ -151,6 +156,12 @@ public:
     void sliceNext() override;
 
 private:
+#ifdef __EMSCRIPTEN__
+    std::string progressHandler;
+#endif
+
+    std::vector<std::filesystem::path> search_directories_;
+
     /*
      * \brief The command line arguments that the application was called with.
      */
@@ -162,12 +173,6 @@ private:
     unsigned int last_shown_progress_;
 
     /*
-     * \brief Get the default search directories to search for definition files.
-     * \return The default search directories to search for definition files.
-     */
-    std::unordered_set<std::string> defaultSearchDirectories();
-
-    /*
      * \brief Load a JSON file and store the settings inside it.
      * \param json_filename The location of the JSON file to load settings from.
      * \param settings The settings storage to store the settings in.
@@ -177,7 +182,7 @@ private:
      * 1, the file could not be opened. If it's 2, there was a syntax error in
      * the file.
      */
-    int loadJSON(const std::string& json_filename, Settings& settings, bool force_read_parent = false, bool force_read_nondefault = false);
+    int loadJSON(const std::filesystem::path& json_filename, Settings& settings, bool force_read_parent = false, bool force_read_nondefault = false);
 
     /*
      * \brief Load a JSON document and store the settings inside it.
@@ -190,7 +195,7 @@ private:
      */
     int loadJSON(
         const rapidjson::Document& document,
-        const std::unordered_set<std::string>& search_directories,
+        const std::vector<std::filesystem::path>& search_directories,
         Settings& settings,
         bool force_read_parent = false,
         bool force_read_nondefault = false);
@@ -211,7 +216,21 @@ private:
      * \param search_directories The directories to search in.
      * \return The first definition file that matches the definition ID.
      */
-    const std::string findDefinitionFile(const std::string& definition_id, const std::unordered_set<std::string>& search_directories);
+    static std::string findDefinitionFile(const std::string& definition_id, const std::vector<std::filesystem::path>& search_directories);
+
+    /*
+     * \brief Read the resolved JSON values from a file.
+     * \param element The path to the file to read the JSON values from.
+     * \return The resolved JSON values.
+     */
+    static std::optional<container_setting_map> readResolvedJsonValues(const std::filesystem::path& json_filename);
+
+    /*
+     * \brief Read the resolved JSON values from a document.
+     * \param document The document to read the JSON values from.
+     * \return The resolved JSON values.
+     */
+    static std::optional<container_setting_map> readResolvedJsonValues(const rapidjson::Document& document);
 };
 
 } // namespace cura
